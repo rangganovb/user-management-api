@@ -2,16 +2,47 @@ import pool from "../config/db.js";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import dotenv from "dotenv";
+import { findByEmail, createUser } from "../models/userModel.js";
 dotenv.config();
+
+const isValidEmail = (email) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+const isValidPassword = (password) =>
+  typeof password === "string" && password.length >= 8;
 
 export const register = async (req, res) => {
   try {
     const { username, email, password } = req.body;
+
+    if (
+      typeof username !== "string" ||
+      typeof email !== "string" ||
+      typeof password !== "string"
+    ) {
+      return res
+        .status(400)
+        .json({ message: "Semua input harus berupa teks (string)" });
+    }
+
+    if (!isValidEmail(email)) {
+      return res
+        .status(400)
+        .json({ message: "Format email tidak valid (harus user@domain.com)" });
+    }
+    if (!isValidPassword(password)) {
+      return res.status(400).json({ message: "Password minimal 8 karakter" });
+    }
+
+    const existing = await findByEmail(email);
+    if (existing) {
+      return res.status(400).json({ message: "Email sudah terdaftar" });
+    }
+
     const hashed = await bcrypt.hash(password, 10);
-    const query =
-      "INSERT INTO users (username, email, password) VALUES ($1, $2, $3) RETURNING id, username, email";
-    const { rows } = await pool.query(query, [username, email, hashed]);
-    res.status(201).json({ message: "User registered", user: rows[0] });
+    const newUser = await createUser(username, email, hashed);
+
+    res
+      .status(201)
+      .json({ message: "User registered successfully", user: newUser });
   } catch (err) {
     res
       .status(500)
@@ -22,21 +53,29 @@ export const register = async (req, res) => {
 export const login = async (req, res) => {
   try {
     const { email, password } = req.body;
-    const query = "SELECT * FROM users WHERE email = $1";
-    const { rows } = await pool.query(query, [email]);
-    if (!rows.length)
-      return res.status(404).json({ message: "User not found" });
 
-    const valid = await bcrypt.compare(password, rows[0].password);
-    if (!valid) return res.status(401).json({ message: "Invalid credentials" });
+    // Validasi input
+    if (!isValidEmail(email)) {
+      return res.status(400).json({ message: "Format email tidak valid" });
+    }
+    if (!isValidPassword(password)) {
+      return res.status(400).json({ message: "Password minimal 8 karakter" });
+    }
+
+    const user = await findByEmail(email);
+    if (!user) return res.status(404).json({ message: "User tidak ditemukan" });
+
+    const valid = await bcrypt.compare(password, user.password);
+    if (!valid)
+      return res.status(401).json({ message: "Email atau password salah" });
 
     const token = jwt.sign(
-      { id: rows[0].id, email: rows[0].email },
+      { id: user.id, email: user.email },
       process.env.JWT_SECRET,
       { expiresIn: "2h" }
     );
-    res.json({ message: "Login successful", token });
+    res.json({ message: "Login berhasil", token });
   } catch (err) {
-    res.status(500).json({ message: "Login failed", error: err.message });
+    res.status(500).json({ message: "Login gagal", error: err.message });
   }
 };
